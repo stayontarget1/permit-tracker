@@ -150,13 +150,33 @@ async function fetchPermit(permit, userAgent) {
   return { permit, meta, avail };
 }
 
+// How long a cancellation stays flagged as "just opened" on the dashboard.
+const NEW_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+// Build a lookup of (permitId:divisionId:date) → prior slot state from the
+// previous KV snapshot, so we can detect `remaining` jumps (= cancellations).
+function buildPrevIndex(prevData) {
+  const idx = new Map();
+  if (!prevData?.rows) return idx;
+  for (const row of prevData.rows) {
+    for (const d of row.dates || []) {
+      idx.set(`${row.permitId}:${row.divisionId}:${d.date}`, d);
+    }
+  }
+  return idx;
+}
+
 // Aggregate: one row per (area, divisionId). Each row lists the available dates.
 // This makes the dashboard scannable — 60 rows instead of 4000+.
-export async function fetchAll(userAgent) {
+export async function fetchAll(userAgent, prevData) {
   const today = todayLA();
   const maxDate = addDaysISO(today, WINDOW_DAYS);
   const groups = new Map();
   const errors = [];
+  const prevIndex = buildPrevIndex(prevData);
+  const havePrev = !!(prevData && prevData.rows && prevData.rows.length);
+  const now = new Date().toISOString();
+  const nowMs = Date.parse(now);
 
   // Fetch all permits in parallel — one slow permit no longer blocks the rest.
   const all = await Promise.all(
@@ -206,7 +226,23 @@ export async function fetchAll(userAgent) {
           };
           groups.set(key, g);
         }
-        g.dates.push({ date: s.date, remaining: s.remaining, total: s.total });
+        const dateEntry = { date: s.date, remaining: s.remaining, total: s.total };
+        // Cancellation detection: if we have a prior snapshot, compare.
+        if (havePrev) {
+          const prev = prevIndex.get(`${permit.id}:${s.divisionId}:${s.date}`);
+          if (!prev) {
+            // Slot re-appeared (was filtered/booked, now has space) → new.
+            dateEntry.openedAt = now;
+          } else if (prev.remaining < s.remaining) {
+            // remaining increased → someone canceled.
+            dateEntry.openedAt = now;
+          } else if (prev.openedAt) {
+            // Preserve the prior openedAt until the NEW window expires.
+            const age = nowMs - Date.parse(prev.openedAt);
+            if (age < NEW_WINDOW_MS) dateEntry.openedAt = prev.openedAt;
+          }
+        }
+        g.dates.push(dateEntry);
         if (s.total < g.minTotal) g.minTotal = s.total;
         if (s.total > g.maxTotal) g.maxTotal = s.total;
       }
@@ -223,6 +259,7 @@ export async function fetchAll(userAgent) {
     // "scarcity" = how filled the typical slot is. Lower = more in-demand trailhead.
     const avgFillRatio =
       g.dates.reduce((acc, d) => acc + (d.total - d.remaining) / d.total, 0) / g.dates.length;
+    const recentOpenings = g.dates.filter((d) => d.openedAt).length;
     rows.push({
       area: g.area,
       areaFull: g.areaFull,
@@ -232,10 +269,11 @@ export async function fetchAll(userAgent) {
       category: g.category,
       firstDate: first.date,
       numDates: g.dates.length,
-      dates: g.dates, // all available date entries
+      dates: g.dates, // all available date entries (each may carry `openedAt`)
       bookUrl,
       typicalTotal: g.maxTotal,
       scarcity: avgFillRatio, // 0 = totally empty quota, 1 = totally booked
+      recentOpenings,
     });
   }
 
@@ -248,7 +286,8 @@ export async function fetchAll(userAgent) {
   });
 
   return {
-    generated: new Date().toISOString(),
+    generated: now,
+    havePrev,
     windowStart: today,
     windowEnd: maxDate,
     totalRows: rows.length,

@@ -5,7 +5,8 @@ const KV_KEY = "snapshot:v1";
 const MAX_STALE_MS = 60 * 60 * 1000; // serve cached up to 1 hour past last refresh
 
 async function refresh(env, ctx) {
-  const data = await fetchAll(env.USER_AGENT);
+  const prev = await getCached(env);
+  const data = await fetchAll(env.USER_AGENT, prev);
   await env.CACHE.put(KV_KEY, JSON.stringify(data));
   return data;
 }

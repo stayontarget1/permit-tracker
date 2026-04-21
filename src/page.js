@@ -78,6 +78,34 @@ h1 .dot {
   border-color: var(--accent-dim);
   background: rgba(80, 240, 144, 0.06);
 }
+.areas { margin-top: 6px; }
+.areas button.active {
+  color: var(--fg);
+  border-color: var(--line-2);
+  background: rgba(255, 255, 255, 0.03);
+}
+.areas button:not(.active) { opacity: 0.5; }
+h2.new-head .tag.new {
+  background: var(--accent); color: var(--bg);
+  animation: pulse 2.2s ease-in-out infinite;
+}
+.slot .date-pill.opened {
+  background: rgba(80, 240, 144, 0.18);
+  color: #d6fce1;
+  border-color: rgba(80, 240, 144, 0.45);
+  box-shadow: 0 0 6px rgba(80, 240, 144, 0.25);
+}
+.slot .new-badge {
+  display: inline-block;
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  padding: 1px 5px;
+  margin-right: 6px;
+  border-radius: 2px;
+  background: var(--accent); color: var(--bg);
+  font-weight: 600;
+  vertical-align: 1px;
+}
 section { margin-bottom: 26px; }
 h2 {
   font-size: 11px;
@@ -198,6 +226,7 @@ footer a { color: var(--muted); }
       <button data-f="14">Next 14d</button>
       <button data-f="30">Next 30d</button>
     </nav>
+    <nav class="filters areas" id="areas" aria-label="Area filter"></nav>
   </header>
   <main id="main">
     <div class="empty" id="loading">Loading availability…</div>
@@ -230,7 +259,16 @@ const fmtRelTime = (iso) => {
 const MAX_DATE_PILLS = 6;
 const ALL_AREAS = ["Yosemite", "Mt. Whitney", "Half Dome", "Desolation", "Inyo NF", "Sequoia-Kings", "Hoover"];
 const FILTER_KEY = "pt.filter";
+const AREA_KEY = "pt.areas";
+const NEW_WINDOW_MS = 24 * 60 * 60 * 1000;
 let activeFilter = localStorage.getItem(FILTER_KEY) || "any";
+let activeAreas;
+try {
+  const stored = JSON.parse(localStorage.getItem(AREA_KEY) || "null");
+  activeAreas = new Set(Array.isArray(stored) ? stored : ALL_AREAS);
+} catch {
+  activeAreas = new Set(ALL_AREAS);
+}
 let lastData = null;
 
 function dateMatchesFilter(iso, filter) {
@@ -256,15 +294,38 @@ function filterRow(row, filter) {
   return { ...row, dates, numDates: dates.length, firstDate: dates[0].date };
 }
 
+function isOpenedRecent(openedAt, nowMs) {
+  if (!openedAt) return false;
+  const t = Date.parse(openedAt);
+  return Number.isFinite(t) && nowMs - t < NEW_WINDOW_MS;
+}
+
 function render(data) {
   lastData = data;
   const main = document.getElementById("main");
   const meta = document.getElementById("meta");
+  const nowMs = Date.now();
 
   const filtered = (data.rows || [])
+    .filter(r => activeAreas.has(r.area))
     .map(r => filterRow(r, activeFilter))
     .filter(Boolean);
   const filteredDates = filtered.reduce((n, r) => n + r.numDates, 0);
+
+  // Build "Just Opened" — rows whose filtered dates include a recent openedAt.
+  const justOpened = [];
+  for (const r of filtered) {
+    const recentDates = r.dates.filter(d => isOpenedRecent(d.openedAt, nowMs));
+    if (recentDates.length) {
+      justOpened.push({ ...r, dates: recentDates, numDates: recentDates.length });
+    }
+  }
+  // Most recently opened first (max openedAt per row).
+  justOpened.sort((a, b) => {
+    const am = Math.max(...a.dates.map(d => Date.parse(d.openedAt)));
+    const bm = Math.max(...b.dates.map(d => Date.parse(d.openedAt)));
+    return bm - am;
+  });
 
   meta.innerHTML = [
     '<span>Updated <b>' + fmtRelTime(data.generated) + '</b></span>',
@@ -281,13 +342,20 @@ function render(data) {
     main.appendChild(e);
   }
 
+  if (justOpened.length) {
+    main.appendChild(renderSection("new", justOpened, {
+      heading: "Just Opened",
+      tagClass: "new",
+      emptyNote: null,
+      headClass: "new-head",
+    }));
+  }
+
   const byCat = {};
-  const areas = new Set();
   for (const r of filtered) {
     (byCat[r.category] ||= []).push(r);
-    areas.add(r.area);
   }
-  // Annotate footer with which areas returned no data this cycle (before filter).
+  // Annotate footer with which areas returned no data this cycle (pre-filter).
   const availableAreas = new Set((data.rows || []).map(r => r.area));
   const sourceLine = ALL_AREAS.map(a => availableAreas.has(a) ? a : a + " (no data)").join(" · ");
   const srcEl = document.getElementById("sources");
@@ -295,53 +363,80 @@ function render(data) {
 
   for (const cat of CAT_ORDER) {
     const list = byCat[cat] || [];
-    const section = document.createElement("section");
-    const h2 = document.createElement("h2");
-    h2.innerHTML =
-      '<span class="tag ' + cat + '">' + CAT_LABEL[cat] + '</span>' +
-      '<span class="count">' + list.length + ' trailhead' + (list.length === 1 ? '' : 's') + ' w/ openings</span>';
-    section.appendChild(h2);
+    main.appendChild(renderSection(cat, list, {
+      heading: CAT_LABEL[cat],
+      tagClass: cat,
+      emptyNote: cat === "day"
+        ? "No day-hike permits currently open."
+        : "No backpacking permits currently open.",
+    }));
+  }
+}
 
-    if (!list.length) {
+function renderSection(key, list, opts) {
+  const section = document.createElement("section");
+  const h2 = document.createElement("h2");
+  if (opts.headClass) h2.className = opts.headClass;
+  const countLabel = key === "new"
+    ? list.length + " opening" + (list.length === 1 ? "" : "s") + " in last 24h"
+    : list.length + " trailhead" + (list.length === 1 ? "" : "s") + " w/ openings";
+  h2.innerHTML =
+    '<span class="tag ' + opts.tagClass + '">' + opts.heading + '</span>' +
+    '<span class="count">' + countLabel + '</span>';
+  section.appendChild(h2);
+
+  if (!list.length) {
+    if (opts.emptyNote) {
       const empty = document.createElement("div");
       empty.className = "empty";
-      empty.textContent = cat === "day"
-        ? "No day-hike permits currently open."
-        : "No backpacking permits currently open.";
+      empty.textContent = opts.emptyNote;
       section.appendChild(empty);
-    } else {
-      const ul = document.createElement("ul");
-      ul.className = "slots";
-      for (const r of list) {
-        const a = document.createElement("a");
-        a.className = "slot";
-        a.href = r.bookUrl;
-        a.target = "_blank";
-        a.rel = "noopener";
-        a.setAttribute("aria-label",
-          CAT_LABEL[cat] + " — " + r.area + " " + r.division + ", " + r.numDates + " open date" + (r.numDates === 1 ? "" : "s") + ". Opens recreation.gov.");
-
-        const pills = r.dates.slice(0, MAX_DATE_PILLS).map(d => {
-          const { dow, short } = fmtDate(d.date);
-          return '<span class="date-pill"><span class="dow">' + dow + '</span>' + short + '</span>';
-        }).join("");
-        const extra = r.dates.length > MAX_DATE_PILLS
-          ? '<span class="date-pill more">+' + (r.dates.length - MAX_DATE_PILLS) + '</span>'
-          : '';
-
-        a.innerHTML =
-          '<span class="orb" aria-hidden="true"></span>' +
-          '<span class="body">' +
-            '<span class="title"><span class="area">' + escapeHtml(r.area) + '</span>' + escapeHtml(r.division) + '</span>' +
-            '<span class="dates">' + pills + extra + '</span>' +
-          '</span>' +
-          '<span class="count"><span class="n">' + r.numDates + '</span><span class="lbl">open</span></span>';
-        ul.appendChild(a);
-      }
-      section.appendChild(ul);
     }
-    main.appendChild(section);
+    return section;
   }
+
+  const ul = document.createElement("ul");
+  ul.className = "slots";
+  for (const r of list) {
+    const a = document.createElement("a");
+    a.className = "slot";
+    // Deep-link to the earliest date in this (possibly filtered) view.
+    const firstDate = r.dates[0] && r.dates[0].date;
+    const targetUrl = firstDate
+      ? r.bookUrl.replace(/date=\d{4}-\d{2}-\d{2}/, "date=" + firstDate)
+      : r.bookUrl;
+    a.href = targetUrl;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.setAttribute("aria-label",
+      opts.heading + " — " + r.area + " " + r.division + ", " +
+      r.numDates + " open date" + (r.numDates === 1 ? "" : "s") + ". Opens recreation.gov.");
+
+    const pills = r.dates.slice(0, MAX_DATE_PILLS).map(d => {
+      const { dow, short } = fmtDate(d.date);
+      const cls = "date-pill" + (d.openedAt ? " opened" : "");
+      return '<span class="' + cls + '"><span class="dow">' + dow + '</span>' + short + '</span>';
+    }).join("");
+    const extra = r.dates.length > MAX_DATE_PILLS
+      ? '<span class="date-pill more">+' + (r.dates.length - MAX_DATE_PILLS) + '</span>'
+      : '';
+    // Mark the row title with a small NEW badge only in the category sections (not the dedicated "Just Opened" one).
+    const hasNew = key !== "new" && r.dates.some(d => d.openedAt);
+    const newBadge = hasNew ? '<span class="new-badge">NEW</span>' : "";
+
+    a.innerHTML =
+      '<span class="orb" aria-hidden="true"></span>' +
+      '<span class="body">' +
+        '<span class="title">' + newBadge +
+          '<span class="area">' + escapeHtml(r.area) + '</span>' + escapeHtml(r.division) +
+        '</span>' +
+        '<span class="dates">' + pills + extra + '</span>' +
+      '</span>' +
+      '<span class="count"><span class="n">' + r.numDates + '</span><span class="lbl">open</span></span>';
+    ul.appendChild(a);
+  }
+  section.appendChild(ul);
+  return section;
 }
 
 function escapeHtml(s) {
@@ -362,7 +457,7 @@ async function load() {
   }
 }
 
-// Filter pill clicks: update state, persist, re-render from cached data.
+// Date-filter pill clicks: update state, persist, re-render from cached data.
 document.getElementById("filters").addEventListener("click", (ev) => {
   const btn = ev.target.closest("button[data-f]");
   if (!btn) return;
@@ -373,10 +468,34 @@ document.getElementById("filters").addEventListener("click", (ev) => {
   }
   if (lastData) render(lastData);
 });
-// Restore active filter from localStorage on load.
+// Restore active date filter from localStorage on load.
 for (const b of document.querySelectorAll("#filters button")) {
   b.classList.toggle("active", b.dataset.f === activeFilter);
 }
+
+// Area pills: build on page init, toggle on click.
+const areasNav = document.getElementById("areas");
+for (const area of ALL_AREAS) {
+  const btn = document.createElement("button");
+  btn.dataset.area = area;
+  btn.textContent = area;
+  if (activeAreas.has(area)) btn.classList.add("active");
+  areasNav.appendChild(btn);
+}
+areasNav.addEventListener("click", (ev) => {
+  const btn = ev.target.closest("button[data-area]");
+  if (!btn) return;
+  const area = btn.dataset.area;
+  if (activeAreas.has(area)) activeAreas.delete(area);
+  else activeAreas.add(area);
+  // Don't allow all-off — re-enable if user toggled the last one off.
+  if (activeAreas.size === 0) for (const a of ALL_AREAS) activeAreas.add(a);
+  localStorage.setItem(AREA_KEY, JSON.stringify([...activeAreas]));
+  for (const b of areasNav.querySelectorAll("button")) {
+    b.classList.toggle("active", activeAreas.has(b.dataset.area));
+  }
+  if (lastData) render(lastData);
+});
 
 load();
 // auto-refresh every 5 minutes while tab is open
