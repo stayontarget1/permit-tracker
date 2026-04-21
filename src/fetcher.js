@@ -70,8 +70,10 @@ async function getJson(url, userAgent) {
   return res.json();
 }
 
+// permitcontent returns full metadata (name + divisions) for every permit we
+// use, across both the permitinyo and permits availability backends.
 async function fetchMeta(permit, userAgent) {
-  const url = `${REC_BASE}/api/${permit.metaApi}/${permit.id}`;
+  const url = `${REC_BASE}/api/permitcontent/${permit.id}`;
   const d = await getJson(url, userAgent);
   const divisions = d?.payload?.divisions || {};
   const names = {};
@@ -140,6 +142,14 @@ async function fetchPermitAvailability(permit, userAgent) {
   return { slots, errors };
 }
 
+async function fetchPermit(permit, userAgent) {
+  const [meta, avail] = await Promise.all([
+    fetchMeta(permit, userAgent).catch((e) => ({ __error: e.message })),
+    fetchPermitAvailability(permit, userAgent),
+  ]);
+  return { permit, meta, avail };
+}
+
 // Aggregate: one row per (area, divisionId). Each row lists the available dates.
 // This makes the dashboard scannable — 60 rows instead of 4000+.
 export async function fetchAll(userAgent) {
@@ -148,11 +158,26 @@ export async function fetchAll(userAgent) {
   const groups = new Map();
   const errors = [];
 
-  for (const permit of PERMITS) {
+  // Fetch all permits in parallel — one slow permit no longer blocks the rest.
+  const all = await Promise.all(
+    PERMITS.map((p) =>
+      fetchPermit(p, userAgent).catch((e) => ({ permit: p, __error: e.message }))
+    )
+  );
+
+  for (const result of all) {
+    const permit = result.permit;
+    if (result.__error) {
+      errors.push(`${permit.area}: ${result.__error}`);
+      continue;
+    }
+    const meta = result.meta && !result.meta.__error
+      ? result.meta
+      : { name: permit.fullName, divisions: {} };
+    if (result.meta?.__error) errors.push(`${permit.area} meta: ${result.meta.__error}`);
+    const { slots, errors: e2 } = result.avail;
+    errors.push(...e2.map((m) => `${permit.area}: ${m}`));
     try {
-      const meta = await fetchMeta(permit, userAgent);
-      const { slots, errors: e2 } = await fetchPermitAvailability(permit, userAgent);
-      errors.push(...e2.map((m) => `${permit.area}: ${m}`));
       for (const s of slots) {
         if (s.date < today || s.date > maxDate) continue;
         if (s.remaining <= 0) continue;

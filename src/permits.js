@@ -1,30 +1,28 @@
 // Permit configuration.
 // Categories: 'day' = day hike, 'overnight' = backpacking / overnight wilderness.
-// Each permit declares how to fetch availability and how to classify its divisions.
+//
+// Two availability endpoints exist upstream and we pick per permit:
+//   - "permitinyo": newer system → /api/permitinyo/{id}/availability?start_date=&end_date=
+//   - "permits":    legacy system → /api/permits/{id}/availability/month?start_date=
+// Metadata (division names) is uniformly available from /api/permitcontent/{id}.
 
 export const PERMITS = [
   {
     id: "445859",
     area: "Yosemite",
     fullName: "Yosemite Wilderness",
-    api: "permitinyo", // special endpoint
-    metaApi: "permitcontent",
+    api: "permitinyo",
     defaultCategory: "overnight",
-    divisionCategory: () => "overnight", // all 69 trailheads are overnight backpacking
     bookingType: "overnight-permit",
   },
   {
-    id: "233260",
+    id: "445860",
     area: "Mt. Whitney",
     fullName: "Mt. Whitney",
-    api: "permits",
-    metaApi: "permits",
+    api: "permitinyo",
     defaultCategory: "overnight",
-    divisionCategory: (divId) => {
-      // 166 = Mt. Whitney Trail (Overnight), 406 = Mt. Whitney Day Use
-      if (String(divId) === "406") return "day";
-      return "overnight";
-    },
+    // 166 = Mt. Whitney Trail (Overnight), 406 = Mt. Whitney Day Use (All Routes)
+    divisionCategory: (divId) => (String(divId) === "406" ? "day" : "overnight"),
     divisionBookingType: (divId) =>
       String(divId) === "406" ? "day-use-permit" : "overnight-permit",
     bookingType: "overnight-permit",
@@ -34,9 +32,39 @@ export const PERMITS = [
     area: "Desolation",
     fullName: "Desolation Wilderness",
     api: "permits",
-    metaApi: "permits",
     defaultCategory: "overnight",
-    divisionCategory: () => "overnight",
+    bookingType: "overnight-permit",
+  },
+  {
+    id: "234652",
+    area: "Half Dome",
+    fullName: "Half Dome (Yosemite)",
+    api: "permits",
+    defaultCategory: "day",
+    bookingType: "day-use-permit",
+  },
+  {
+    id: "233262",
+    area: "Inyo NF",
+    fullName: "Inyo National Forest Wilderness",
+    api: "permitinyo",
+    defaultCategory: "overnight",
+    bookingType: "overnight-permit",
+  },
+  {
+    id: "445857",
+    area: "Sequoia-Kings",
+    fullName: "Sequoia & Kings Canyon Wilderness",
+    api: "permitinyo",
+    defaultCategory: "overnight",
+    bookingType: "overnight-permit",
+  },
+  {
+    id: "445856",
+    area: "Hoover",
+    fullName: "Hoover Wilderness",
+    api: "permitinyo",
+    defaultCategory: "overnight",
     bookingType: "overnight-permit",
   },
 ];
@@ -46,10 +74,7 @@ export const CATEGORY_LABELS = {
   overnight: "Backpacking",
 };
 
-// Dates where the permit's quota is effectively unlimited/walk-up get skipped
-// because they're not interesting for a "what just opened up?" dashboard.
-// Desolation uses 900000 for zones with no quota limit, and 999 as a
-// "throttled but effectively unlimited" signal for its thru-hike bucket.
-// Real Yosemite trailhead quotas max out around 30; Mt. Whitney day-use around 160.
-// 300 is well above any real wilderness quota and filters out both 999 and 900000.
+// Dates where the quota is effectively unlimited/walk-up get skipped — they
+// aren't actionable "what just opened?" signal. Real wilderness quotas top out
+// around 160 (Whitney day-use); anything above 300 is a sentinel for no limit.
 export const NO_QUOTA_THRESHOLD = 300;

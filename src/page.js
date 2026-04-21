@@ -11,6 +11,11 @@ export const HTML = `<!doctype html>
 <meta name="robots" content="noindex,nofollow">
 <title>Permit Tracker</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230a0c0a'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%2350f090'/%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'%3E%3Crect width='180' height='180' rx='40' fill='%230a0c0a'/%3E%3Ccircle cx='90' cy='90' r='28' fill='%2350f090'/%3E%3Ccircle cx='90' cy='90' r='44' fill='none' stroke='%2350f090' stroke-width='3' opacity='0.4'/%3E%3C/svg%3E">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Permits">
 <style>
 :root {
   --bg: #0a0c0a;
@@ -54,6 +59,25 @@ h1 .dot {
 .sub { color: var(--muted); font-size: 12px; }
 .meta { color: var(--muted); font-size: 11px; margin-top: 4px; display: flex; flex-wrap: wrap; gap: 10px; }
 .meta span b { color: var(--fg); font-weight: 500; }
+.filters { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+.filters button {
+  font: inherit; font-size: 11px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 5px 10px;
+  cursor: pointer;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.filters button:hover { border-color: var(--line-2); color: var(--fg); }
+.filters button.active {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+  background: rgba(80, 240, 144, 0.06);
+}
 section { margin-bottom: 26px; }
 h2 {
   font-size: 11px;
@@ -168,6 +192,12 @@ footer a { color: var(--muted); }
     <h1><span class="dot" aria-hidden="true"></span>Permit Tracker</h1>
     <div class="sub">California wilderness permits — live availability, next 90 days.</div>
     <div class="meta" id="meta"></div>
+    <nav class="filters" id="filters" aria-label="Date filter">
+      <button data-f="any" class="active">Any date</button>
+      <button data-f="weekend">Weekend</button>
+      <button data-f="14">Next 14d</button>
+      <button data-f="30">Next 30d</button>
+    </nav>
   </header>
   <main id="main">
     <div class="empty" id="loading">Loading availability…</div>
@@ -198,15 +228,49 @@ const fmtRelTime = (iso) => {
 };
 
 const MAX_DATE_PILLS = 6;
+const ALL_AREAS = ["Yosemite", "Mt. Whitney", "Half Dome", "Desolation", "Inyo NF", "Sequoia-Kings", "Hoover"];
+const FILTER_KEY = "pt.filter";
+let activeFilter = localStorage.getItem(FILTER_KEY) || "any";
+let lastData = null;
+
+function dateMatchesFilter(iso, filter) {
+  if (filter === "any") return true;
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (filter === "weekend") {
+    const dow = dt.getUTCDay(); // 0=Sun, 5=Fri, 6=Sat
+    return dow === 5 || dow === 6 || dow === 0;
+  }
+  const days = parseInt(filter, 10);
+  if (!Number.isFinite(days)) return true;
+  const now = new Date();
+  const todayUTC = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const diff = (dt.getTime() - todayUTC) / 86400000;
+  return diff >= 0 && diff <= days;
+}
+
+function filterRow(row, filter) {
+  if (filter === "any") return row;
+  const dates = row.dates.filter(d => dateMatchesFilter(d.date, filter));
+  if (!dates.length) return null;
+  return { ...row, dates, numDates: dates.length, firstDate: dates[0].date };
+}
 
 function render(data) {
+  lastData = data;
   const main = document.getElementById("main");
   const meta = document.getElementById("meta");
+
+  const filtered = (data.rows || [])
+    .map(r => filterRow(r, activeFilter))
+    .filter(Boolean);
+  const filteredDates = filtered.reduce((n, r) => n + r.numDates, 0);
+
   meta.innerHTML = [
     '<span>Updated <b>' + fmtRelTime(data.generated) + '</b></span>',
     '<span>Window <b>' + data.windowStart + ' → ' + data.windowEnd + '</b></span>',
-    '<span>Trailheads <b>' + data.totalRows + '</b></span>',
-    '<span>Open dates <b>' + data.totalDateSlots + '</b></span>'
+    '<span>Trailheads <b>' + filtered.length + '</b></span>',
+    '<span>Open dates <b>' + filteredDates + '</b></span>'
   ].join("");
   main.innerHTML = "";
 
@@ -219,13 +283,13 @@ function render(data) {
 
   const byCat = {};
   const areas = new Set();
-  for (const r of (data.rows || [])) {
+  for (const r of filtered) {
     (byCat[r.category] ||= []).push(r);
     areas.add(r.area);
   }
-  // Annotate footer sources with which feeds returned no data this cycle.
-  const allAreas = ["Yosemite", "Mt. Whitney", "Desolation"];
-  const sourceLine = allAreas.map(a => areas.has(a) ? a : a + " (no data)").join(" · ");
+  // Annotate footer with which areas returned no data this cycle (before filter).
+  const availableAreas = new Set((data.rows || []).map(r => r.area));
+  const sourceLine = ALL_AREAS.map(a => availableAreas.has(a) ? a : a + " (no data)").join(" · ");
   const srcEl = document.getElementById("sources");
   if (srcEl) srcEl.textContent = sourceLine;
 
@@ -296,6 +360,22 @@ async function load() {
     document.getElementById("main").innerHTML =
       '<div class="error">Could not load data: ' + escapeHtml(e.message) + '</div>';
   }
+}
+
+// Filter pill clicks: update state, persist, re-render from cached data.
+document.getElementById("filters").addEventListener("click", (ev) => {
+  const btn = ev.target.closest("button[data-f]");
+  if (!btn) return;
+  activeFilter = btn.dataset.f;
+  localStorage.setItem(FILTER_KEY, activeFilter);
+  for (const b of document.querySelectorAll("#filters button")) {
+    b.classList.toggle("active", b.dataset.f === activeFilter);
+  }
+  if (lastData) render(lastData);
+});
+// Restore active filter from localStorage on load.
+for (const b of document.querySelectorAll("#filters button")) {
+  b.classList.toggle("active", b.dataset.f === activeFilter);
 }
 
 load();

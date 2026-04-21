@@ -35,6 +35,34 @@ export default {
       });
     }
 
+    if (url.pathname === "/manifest.webmanifest") {
+      const manifest = {
+        name: "Permit Tracker",
+        short_name: "Permits",
+        description: "Live California wilderness permit availability",
+        start_url: "/",
+        scope: "/",
+        display: "standalone",
+        orientation: "portrait",
+        background_color: "#0a0c0a",
+        theme_color: "#0a0c0a",
+        icons: [
+          {
+            src: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='112' fill='%230a0c0a'/%3E%3Ccircle cx='256' cy='256' r='80' fill='%2350f090'/%3E%3Ccircle cx='256' cy='256' r='128' fill='none' stroke='%2350f090' stroke-width='8' opacity='0.4'/%3E%3C/svg%3E",
+            type: "image/svg+xml",
+            sizes: "any",
+            purpose: "any",
+          },
+        ],
+      };
+      return new Response(JSON.stringify(manifest), {
+        headers: {
+          "content-type": "application/manifest+json; charset=utf-8",
+          "cache-control": "public, max-age=86400",
+        },
+      });
+    }
+
     if (url.pathname === "/data") {
       let data = await getCached(env);
       const now = Date.now();
