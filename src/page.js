@@ -79,12 +79,6 @@ h1 .dot {
   background: rgba(80, 240, 144, 0.06);
 }
 .areas { margin-top: 6px; }
-.areas button.active {
-  color: var(--fg);
-  border-color: var(--line-2);
-  background: rgba(255, 255, 255, 0.03);
-}
-.areas button:not(.active) { opacity: 0.5; }
 h2.new-head .tag.new {
   background: var(--accent); color: var(--bg);
   animation: pulse 2.2s ease-in-out infinite;
@@ -222,7 +216,7 @@ footer a { color: var(--muted); }
     <div class="meta" id="meta"></div>
     <nav class="filters" id="filters" aria-label="Date filter">
       <button data-f="any" class="active">Any date</button>
-      <button data-f="weekend">Weekend</button>
+      <button data-f="weekend">This weekend</button>
       <button data-f="14">Next 14d</button>
       <button data-f="30">Next 30d</button>
     </nav>
@@ -271,19 +265,38 @@ try {
 }
 let lastData = null;
 
+// "Today" in America/Los_Angeles, as a UTC-midnight timestamp. Matches the
+// window the worker uses so the client filter stays aligned with server data.
+function todayLAMidnightUTC() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Los_Angeles",
+    year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(new Date());
+  const y = +parts.find(p => p.type === "year").value;
+  const m = +parts.find(p => p.type === "month").value;
+  const d = +parts.find(p => p.type === "day").value;
+  return Date.UTC(y, m - 1, d);
+}
+
 function dateMatchesFilter(iso, filter) {
   if (filter === "any") return true;
   const [y, m, d] = iso.split("-").map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d));
+  const dt = Date.UTC(y, m - 1, d);
+  const today = todayLAMidnightUTC();
+  if (dt < today) return false;
   if (filter === "weekend") {
-    const dow = dt.getUTCDay(); // 0=Sun, 5=Fri, 6=Sat
-    return dow === 5 || dow === 6 || dow === 0;
+    // "This weekend" = the Fri–Sun block of the current or upcoming weekend.
+    // If today is Sun, just today. If Sat, today + Sun. If Fri, today + Sat + Sun.
+    // Otherwise Mon–Thu: next Fri + Sat + Sun.
+    const todayDow = new Date(today).getUTCDay(); // 0..6
+    const daysToSun = (7 - todayDow) % 7;
+    const sun = today + daysToSun * 86400000;
+    const fri = sun - 2 * 86400000;
+    return dt >= Math.max(today, fri) && dt <= sun;
   }
   const days = parseInt(filter, 10);
   if (!Number.isFinite(days)) return true;
-  const now = new Date();
-  const todayUTC = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  const diff = (dt.getTime() - todayUTC) / 86400000;
+  const diff = (dt - today) / 86400000;
   return diff >= 0 && diff <= days;
 }
 
