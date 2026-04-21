@@ -59,7 +59,15 @@ h1 .dot {
 .sub { color: var(--muted); font-size: 12px; }
 .meta { color: var(--muted); font-size: 11px; margin-top: 4px; display: flex; flex-wrap: wrap; gap: 10px; }
 .meta span b { color: var(--fg); font-weight: 500; }
-.filters { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+.filter-group { margin-top: 16px; }
+.filter-label {
+  font-size: 9px;
+  letter-spacing: 0.22em;
+  color: var(--muted);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.filters { display: flex; flex-wrap: wrap; gap: 6px; }
 .filters button {
   font: inherit; font-size: 11px;
   color: var(--muted);
@@ -78,7 +86,6 @@ h1 .dot {
   border-color: var(--accent-dim);
   background: rgba(80, 240, 144, 0.06);
 }
-.areas { margin-top: 6px; }
 h2.new-head .tag.new {
   background: var(--accent); color: var(--bg);
   animation: pulse 2.2s ease-in-out infinite;
@@ -214,13 +221,19 @@ footer a { color: var(--muted); }
     <h1><span class="dot" aria-hidden="true"></span>Permit Tracker</h1>
     <div class="sub">California wilderness permits — live availability, next 90 days.</div>
     <div class="meta" id="meta"></div>
-    <nav class="filters" id="filters" aria-label="Date filter">
-      <button data-f="any" class="active">Any date</button>
-      <button data-f="weekend">This weekend</button>
-      <button data-f="14">Next 14d</button>
-      <button data-f="30">Next 30d</button>
-    </nav>
-    <nav class="filters areas" id="areas" aria-label="Area filter"></nav>
+    <div class="filter-group">
+      <div class="filter-label">When</div>
+      <nav class="filters" id="filters" aria-label="Date filter">
+        <button data-f="any" class="active">Any date</button>
+        <button data-f="weekend">This weekend</button>
+        <button data-f="14">Next 14d</button>
+        <button data-f="30">Next 30d</button>
+      </nav>
+    </div>
+    <div class="filter-group">
+      <div class="filter-label">Where</div>
+      <nav class="filters areas" id="areas" aria-label="Area filter"></nav>
+    </div>
   </header>
   <main id="main">
     <div class="empty" id="loading">Loading availability…</div>
@@ -251,17 +264,28 @@ const fmtRelTime = (iso) => {
 };
 
 const MAX_DATE_PILLS = 6;
+// Declaration order for the footer sources line.
 const ALL_AREAS = ["Yosemite", "Mt. Whitney", "Half Dome", "Desolation", "Inyo NF", "Sequoia-Kings", "Hoover"];
+// Display order for the Where pills — alphabetical, with "All" prepended.
+const AREA_OPTIONS = [...ALL_AREAS].sort((a, b) => a.localeCompare(b));
 const FILTER_KEY = "pt.filter";
-const AREA_KEY = "pt.areas";
+const AREA_KEY = "pt.area";
+const OLD_AREA_KEY = "pt.areas";
 const NEW_WINDOW_MS = 24 * 60 * 60 * 1000;
 let activeFilter = localStorage.getItem(FILTER_KEY) || "any";
-let activeAreas;
-try {
-  const stored = JSON.parse(localStorage.getItem(AREA_KEY) || "null");
-  activeAreas = new Set(Array.isArray(stored) ? stored : ALL_AREAS);
-} catch {
-  activeAreas = new Set(ALL_AREAS);
+let activeArea = localStorage.getItem(AREA_KEY);
+if (!activeArea) {
+  // Migrate from the old multi-select key: if the stored set was exactly
+  // one area, carry it over; otherwise fall back to "all".
+  try {
+    const prev = JSON.parse(localStorage.getItem(OLD_AREA_KEY) || "null");
+    if (Array.isArray(prev) && prev.length === 1 && ALL_AREAS.includes(prev[0])) {
+      activeArea = prev[0];
+    }
+  } catch {}
+  if (!activeArea) activeArea = "all";
+  localStorage.setItem(AREA_KEY, activeArea);
+  localStorage.removeItem(OLD_AREA_KEY);
 }
 let lastData = null;
 
@@ -320,7 +344,7 @@ function render(data) {
   const nowMs = Date.now();
 
   const filtered = (data.rows || [])
-    .filter(r => activeAreas.has(r.area))
+    .filter(r => activeArea === "all" || r.area === activeArea)
     .map(r => filterRow(r, activeFilter))
     .filter(Boolean);
   const filteredDates = filtered.reduce((n, r) => n + r.numDates, 0);
@@ -486,26 +510,25 @@ for (const b of document.querySelectorAll("#filters button")) {
   b.classList.toggle("active", b.dataset.f === activeFilter);
 }
 
-// Area pills: build on page init, toggle on click.
+// Area pills: single-select. "All" first, then alphabetical. Matches the
+// date-pill semantics (one active at a time).
 const areasNav = document.getElementById("areas");
-for (const area of ALL_AREAS) {
+function addAreaPill(value, label) {
   const btn = document.createElement("button");
-  btn.dataset.area = area;
-  btn.textContent = area;
-  if (activeAreas.has(area)) btn.classList.add("active");
+  btn.dataset.area = value;
+  btn.textContent = label;
+  if (activeArea === value) btn.classList.add("active");
   areasNav.appendChild(btn);
 }
+addAreaPill("all", "All");
+for (const area of AREA_OPTIONS) addAreaPill(area, area);
 areasNav.addEventListener("click", (ev) => {
   const btn = ev.target.closest("button[data-area]");
   if (!btn) return;
-  const area = btn.dataset.area;
-  if (activeAreas.has(area)) activeAreas.delete(area);
-  else activeAreas.add(area);
-  // Don't allow all-off — re-enable if user toggled the last one off.
-  if (activeAreas.size === 0) for (const a of ALL_AREAS) activeAreas.add(a);
-  localStorage.setItem(AREA_KEY, JSON.stringify([...activeAreas]));
+  activeArea = btn.dataset.area;
+  localStorage.setItem(AREA_KEY, activeArea);
   for (const b of areasNav.querySelectorAll("button")) {
-    b.classList.toggle("active", activeAreas.has(b.dataset.area));
+    b.classList.toggle("active", b.dataset.area === activeArea);
   }
   if (lastData) render(lastData);
 });
