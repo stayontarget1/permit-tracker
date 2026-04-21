@@ -1,0 +1,20 @@
+{
+  "$schema": "https://unpkg.com/wrangler/config-schema.json",
+  "name": "permit-tracker",
+  "main": "src/worker.js",
+  "compatibility_date": "2025-01-01",
+  "account_id": "04a39637d39fa6d2c45befdb171f4bcc",
+  "observability": { "enabled": true },
+  "triggers": {
+    "crons": ["*/15 * * * *"]
+  },
+  "kv_namespaces": [
+    {
+      "binding": "CACHE",
+      "id": "78498eba3cfd4e36bd37a247a49fcf8e"
+    }
+  ],
+  "vars": {
+    "USER_AGENT": "PermitTracker/1.0 (+https://permit-tracker.dylanschmidt.com)"
+  }
+}

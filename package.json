@@ -1,0 +1,10 @@
+{
+  "name": "permit-tracker",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "refresh": "wrangler deployments list && echo 'Trigger refresh: curl https://permit-tracker.<subdomain>.workers.dev/refresh'"
+  }
+}
